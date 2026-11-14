@@ -17,6 +17,7 @@
 // home button still shows the whole city.
 
 import { inBounds, lonLatToPx } from "./projection.js";
+import { createTransitLayer } from "./transit.js";
 
 const params = new URLSearchParams(location.search);
 // Default: the accepted map (output/philly/FROZEN_v18.json, accepted Nov. 9,
@@ -33,7 +34,13 @@ const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const status = document.getElementById("status");
 
 const meta = await (await fetch(base + "map.json")).json();
-document.getElementById("credits").textContent = meta.credits;
+// The live transit layer (transit.js) runs on v18 only: its building masks
+// are v18's. Off in the offline copy (it needs the network) and with ?live=off.
+const liveParam = params.get("live");
+const transitOn = area === "philly" && version === "v18" && !offline && liveParam !== "off";
+// map.json's credits are frozen with the map, so the transit credit is added here
+const TRANSIT_CREDIT = " Live transit: vehicle positions and schedules from SEPTA; tunnels © OpenStreetMap contributors.";
+document.getElementById("credits").textContent = meta.credits + (transitOn ? TRANSIT_CREDIT : "");
 document.title = `Pixel Philly: ${meta.label}`;
 
 // City Hall, at 4 map px per screen px: about 2 km of Center City across a
@@ -95,6 +102,22 @@ viewer.addHandler("animation-finish", () => {
   const z = base0().viewportToImageZoom(vp.getZoom());
   history.replaceState(null, "", `#x=${Math.round(c.x)}&y=${Math.round(c.y)}&z=${z.toFixed(3)}`);
 });
+
+// --- live transit -----------------------------------------------------------
+// Always on, with no button in the bar: vehicles are something to come across
+// when zoomed in (Stephen, Nov. 14). The status line keeps SEPTA's update time.
+// ?live=off turns the layer off.
+// The hosted site reads live/vehicles.json from the bucket (worker/septa-live.js
+// writes it); a local server reads output/live/vehicles.json from
+// scripts/38_live_feed.py.
+if (transitOn) {
+  const local = liveParam === "local" || ["localhost", "127.0.0.1"].includes(location.hostname);
+  const transit = createTransitLayer(viewer, {
+    meta, root: "../", liveUrl: local ? "../output/live/vehicles.json" : "../live/vehicles.json",
+    status: document.getElementById("transit-status"), reduceMotion,
+  });
+  viewer.addHandler("open", () => transit.setOn(true));
+}
 
 // --- controls ---------------------------------------------------------------
 document.getElementById("zoom-in").onclick = () => viewer.viewport.zoomBy(1.6);

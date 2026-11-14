@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-11-14: live SEPTA transit layer
+
+Stephen asked for live SEPTA buses, rail and the El on the map (Indego skipped for now). The plan was approved in plan mode. This is a viewer layer, so the map image doesn't change, and v18 stays frozen and untouched (new files live in their own folders).
+
+- **Feeds checked first (Nov. 14, 1 p.m., a Saturday).**
+  - TransitViewAll: 448 buses and trolleys on 116 routes.
+  - TrainView: 24 Regional Rail trains.
+  - The El (L1) and the Broad Street Line (B1–B3) were in none of TransitView, GTFS-RT vehicle positions or GTFS-RT trip updates. The earlier check, a Saturday at 6 a.m., found the same. A weekday check is still to do.
+  - **So El trains come from SEPTA's timetable and are labeled "scheduled,"** and the Broad Street Line (underground in the city) isn't drawn.
+- **`scripts/04r_fetch_transit.py`** downloads two raw files:
+  - SEPTA's GTFS release `v202611010` (26.7 MB);
+  - 487 OpenStreetMap rail tunnel ways inside the map.
+- **`src/pixelphilly/transit.py` + `scripts/35_build_transit.py`** write `output/philly/transit/v202611010/` (1.28 MB in all):
+  - 158 routes, 135 of them bus;
+  - each route's shapes in map pixels, clipped to the map, simplified to 2 px, with tunnel stretches;
+  - the El timetable: 967 trips in 7 repeating patterns, with service days through Feb. 20, 2027;
+  - the city line in map px.
+  - Duplicate shapes are stored once. Trips on a duplicate point at the copy that was kept: a first build dropped 955 of the 967 El trips this way, and that was fixed before anything used it.
+  - Rebuilding gives byte-identical files.
+- **Check against the map:** route shapes drawn over v18 crops (Market St at 52nd, Front St, Regional Rail near North Broad) sit on the drawn streets and tracks, within a few meters. Elevated track is drawn flat from the aerial photo, so vehicles at ground level line up with it.
+- **`scripts/36_build_occlusion.py`** joins every frame's building mask (`06_render.py --mode mask`) in v18's region order. It writes `output/philly/overlays/v18/`: levels 15–17, 37,039 1-bit PNG tiles, 47 MB, built in 0.4 minutes.
+  - It refuses to run unless the canvas size, lattice corner and cells per region match v18 exactly.
+  - Overlaying a mask on the illustration showed close alignment, and the El station canopy at 52nd St is correctly not masked.
+- **`scripts/37_vehicle_sprites.py`** draws real-size boxes with the map's own camera, in 16 headings each (72 after the fix below), to `output/philly/transit/sprites.png`. Sizes are approximate published dimensions:
+  - bus 12.2 m;
+  - trolley 15.2 m;
+  - El car 16.8 m, six to a train;
+  - Silverliner car 25.9 m, two to eight per train, from TrainView's consist, or four.
+- **`worker/septa-live.js`** is a Cloudflare Worker on a one-minute cron that polls 4 times, 15 s apart. Each poll:
+  - keeps vehicles inside the map;
+  - drops reports more than 5 minutes old;
+  - maps SEPTA's 998/999 "no estimate" lateness to none;
+  - writes `live/vehicles.json` (about 31 KB, 8.6 KB gzipped) to the bucket.
+  - **Not deployed yet:** it needs Stephen's Cloudflare dashboard (README "Live transit layer").
+  - **`scripts/38_live_feed.py`** is the local stand-in, with the same output.
+- **`viewer/transit.js` + `viewer/transit_core.js`** draw the layer on a canvas over the map. It's on by default, with a "Live transit" toggle and a status line.
+  - Zoomed out, vehicles were dots in kind colors: 103 of the 135 bus routes are near-black in the GTFS, which disappeared on the map. The dots were later dropped (below).
+  - Zoomed in, vehicles are sprites, erased behind buildings with the mask pyramid.
+  - Vehicles snap to their route and glide along it between updates.
+  - Vehicles in tunnels or outside the city line are hidden.
+  - Clicking a visible vehicle shows its route, destination and SEPTA's lateness.
+  - The layer is off in the offline copy, on versions other than v18 and with `?live=off`. The transit credit is added in the viewer, because map.json's credits are frozen.
+- **Browser checks** (headless Chromium, local feed running):
+  - **Hiding behind buildings:** across 5 views, 11 vehicles whose ground point is under a building were hidden, none leaked through, and one rail car beside a building at 0.3 zoom was erased by the half-resolution mask's soft edge.
+  - **Motion:** in 40 s across two updates, 37 vehicles moved in steps of 5.8 px median per half second (28 px at most), with no jumps.
+  - **Snapping:** a first run left about 23% of vehicles unsnapped; vehicles first seen before their route's shapes loaded were never snapped. Fixed, so a vehicle snaps in place once its shapes arrive. Offline, 93% of bus and trolley reports are within 60 px of a shape. The rest are 100–2,000 px off (layovers, garages, detours) and are drawn as reported.
+  - **Frame rate:** 60 fps at 1440 x 900 with 355 dots citywide, and in two closer views.
+  - **Clicks:** clicking a vehicle showed "Route 16 bus to 15th-Market, 7 min. late." Clicks now skip vehicles hidden behind buildings.
+- **Fix: vehicles looked slanted, and train cars were uneven on curves** (Stephen, after viewing it locally). Failing tests came first: 6 new in `test_transit_viewer.py`, one in `test_vehicle_sprites.py`. Four causes:
+  - **Coarse headings.** With 16 sprite headings, a vehicle could be 11° off its street, and Philadelphia's grid doesn't fall on 22.5° steps. Sprites now come in 72 headings (5°) and are picked by compass bearing, so a vehicle is at most 2.5° off. The sheet wraps at 2,048 px and is 98 KB.
+  - **Spacing in screen pixels.** Cars were spaced in map pixels, but the camera foreshortens: 1 m is 2.44 to 3.39 px depending on direction (measured from the v18 camera). So cars bunched or spread as the track turned. Layout now happens in ground meters, using the camera's ground-to-pixel matrix, now in `sprites.json`. Each car is its real length plus a 1 m gap along the track. It rests on two trucks (bus axles at 20% and 75% of its length; rail trucks at 15% and 85%, approximate), faces along the line between them and sits at their midpoint (`carLayout`). Glides run at a steady ground speed.
+  - **Snapping turned vehicles sideways.** A vehicle hopping a few pixels onto its route faced the hop's direction for a full update. Moves under 30 px no longer turn a vehicle, and a vehicle landing on its route faces along it.
+  - **Glides along the route never happened.** An update arriving just before the previous move ended caught the vehicle without its route, so every later move was a straight line (0 of 2,200 moves in one check). Now a position caught mid-move keeps its route (`onRoute`), and the shapes of every route in an update load before its vehicles are placed. After the fix: 1,208 glides along routes against 895 straight moves (off-route vehicles), with no jumps.
+  - **Check:** with the page clock pinned to a scheduled El passing (Nov. 16, 1:03 p.m.), the train rounds the Kensington Ave–Front St curve with uniform cars, each turned a little more than the one behind it. The full suite passes (531).
+- **No dots when zoomed out** (Stephen: "I just want this to be something people come across, not a driving feature"). Below 0.12 screen px per map px nothing is drawn, and clicks find nothing. Vehicles appear as sprites from there in, where a bus is about 5 px long. Checked headless: 0 vehicles drawn at zoom 0.02 and 0.1, vehicles drawn at 0.3.
+- **No "Live transit" button** (Stephen: "fine to lose the button from the bar. It's worth leaving the Septa data update note"). The layer is always on, the status line with SEPTA's update time stays, and `?live=off` still turns it off. `createTransitLayer` takes the button as an option, unused.
+- **Docs:** README section "Live transit layer" (how it works, rebuild, publish, Worker setup, costs as estimates), `data/README.md` sources, and an about-page "Live transit" section.
+- **Tests:** 33 new, in `test_transit.py`, `test_live_feed.py` (the Worker's JavaScript and the Python stand-in agree on real SEPTA responses), `test_transit_viewer.py`, `test_vehicle_sprites.py` and `test_occlusion.py`. The full suite passed (526) before the fix above.
+
 ## 2026-11-13: promo video and GIF
 
 Stephen asked for a video or GIF that slowly pans across parts of the city to promote the map.

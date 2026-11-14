@@ -80,3 +80,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
 }
 
 .credits a { color: var(--accent); }
+
+/* Live transit layer (transit.js): drawn over the map, never catches the pointer */
+.transit-layer { position: absolute; inset: 0; pointer-events: none; }
+.transit-tip { position: absolute; transform: translate(-50%, calc(-100% - 14px)); max-width: 260px;
+  padding: 5px 9px; border-radius: 6px; background: var(--panel); color: var(--fg); border: 1px solid var(--line);
+  font-size: 0.82rem; line-height: 1.3; pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); z-index: 5; }
+.transit-tip[hidden] { display: none; }

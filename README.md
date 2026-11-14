@@ -12,6 +12,7 @@ The idea comes from [tiny.london](https://tiny.london) and [isometric.nyc](https
 - [How it was made](#how-it-was-made)
 - [Scale and cost](#scale-and-cost)
 - [Map versions](#map-versions)
+- [Live transit layer](#live-transit-layer)
 - [Rebuild the map](#rebuild-the-map)
 - [Repository layout](#repository-layout)
 - [Design decisions and assumptions](#design-decisions-and-assumptions)
@@ -72,6 +73,61 @@ The idea comes from [tiny.london](https://tiny.london) and [isometric.nyc](https
 | v14 | Nov. 4, 2026 | The first full-city map. Local only, plus an offline copy | `?v=v14` |
 
 Each frozen version has a manifest, `output/philly/FROZEN_<version>.json`. Check one with `uv run python scripts/26_freeze_map.py --name philly --version v18 --verify`. Don't rebuild or edit a frozen version; **the next version is v19.** A change for v19 usually means: fix the scene data or a reviewed config list, rerender the affected region, redraw only the frames that changed ("Fix passes" below), merge and repaint, then build v19. Versions before v14 were working builds; the CHANGELOG describes each.
+
+## Live transit layer
+
+The viewer draws SEPTA vehicles on the map: buses, trolleys and Regional Rail trains from SEPTA's live feeds, and Market-Frankford El trains from the timetable. It's a layer over the map, so the map image and version don't change. It runs on v18 only, because it uses v18's building masks.
+
+**How it works**
+
+```
+SEPTA TransitViewAll + TrainView ──(every 15 s)── Cloudflare Worker (worker/septa-live.js, cron)
+                                                        │ writes
+                                         R2: live/vehicles.json  (~31 KB, ~9 KB gzipped)
+                                                        │ each viewer polls every 15 s
+viewer/transit.js ── snaps vehicles to route shapes, glides them along, hides them behind buildings
+```
+
+- **Why a Worker:** SEPTA's live feeds send no CORS header, so a browser on this domain can't read them. The Worker fetches them 4 times a minute and writes one small file to the map's bucket. SEPTA sees 4 requests a minute however many people are watching, and viewers read a cached static file.
+- **The El has no live data.** On Nov. 14, 2026, routes L1 (El) and B1–B3 (Broad Street Line) were missing from TransitView, GTFS-RT vehicle positions and GTFS-RT trip updates. El trains are placed from SEPTA's GTFS timetable and labeled "scheduled." The Broad Street Line is underground in the city and isn't drawn.
+- **Snapping:** each vehicle is snapped onto its route's GTFS shape (in map pixels). Between updates it glides there along the shape from where it is drawn, so the display runs about one update (15 s) behind. A vehicle prefers the shape it is already moving forward on, which tells a route's two directions apart. A vehicle more than 60 map px (about 18 m) from every shape (detours, garages) is drawn where SEPTA reports it. In a test on Nov. 14, 93% of bus and trolley reports were within 60 px of a shape.
+- **Hiding behind buildings:** every frame was also rendered as a building mask (`06_render.py --mode mask`). `36_build_occlusion.py` joins those masks into a pyramid that lines up with v18. Vehicles run at street level, so wherever a building pixel covers a vehicle, the building is in front, and the viewer erases the vehicle there.
+- **Ground level:** elevated track (the El deck, rail viaducts) isn't modeled in the scene; it comes from the aerial photo draped flat. Vehicles sit at ground level, which is where the track is drawn.
+- **Tunnels:** OpenStreetMap rail tunnels, matched by railway type and direction, mark the stretches of each rail and trolley shape where vehicles aren't drawn.
+- **Sprites:** boxes at real size (approximate published dimensions), drawn with the map's own camera in 72 headings, every 5° (`37_vehicle_sprites.py`). Vehicles appear only zoomed in (0.12 screen px per map px or closer, where a bus is about 5 px long). There are no citywide dots: the layer is meant to be come across, not to drive the map.
+- **Laying vehicles on the track:** the camera foreshortens the ground (1 m is 2.4 to 3.4 map px depending on direction), so the viewer works in ground meters. Each car is its real length, with 1 m between cars, measured along the track. It rests on two trucks (axles, for a bus) on the route shape, faces along the line between them and is drawn at their midpoint. Cars stay uniform and bend through curves, and a bus turning a corner faces between the two streets. Vehicles glide at a steady ground speed. Off-route vehicles face SEPTA's GPS heading.
+- **Offline copy and other versions:** the layer is off. `?live=off` turns it off on the hosted site.
+
+**Build the static files**
+
+```bash
+uv run python scripts/04r_fetch_transit.py        # SEPTA GTFS (pinned release) + OSM rail tunnels -> data/raw/
+uv run python scripts/35_build_transit.py         # -> output/philly/transit/v202611010/ (routes, shapes, El timetable, 1.3 MB)
+uv run python scripts/36_build_occlusion.py       # -> output/philly/overlays/v18/ (building masks, 37,039 tiles, 47 MB)
+uv run python scripts/37_vehicle_sprites.py       # -> output/philly/transit/sprites.png + sprites.json
+```
+
+**Work on it locally:** run `uv run python scripts/38_live_feed.py` next to the local web server. It writes `output/live/vehicles.json` every 15 s, and the viewer reads that file when it's served from `localhost` or `127.0.0.1` (or with `?live=local`).
+
+**When SEPTA publishes a new timetable** (every few weeks; the current one, `v202611010`, covers Nov. 1, 2026, through Feb. 20, 2027): set `GTFS_RELEASE` in `scripts/04r_fetch_transit.py`, run it and `35_build_transit.py`, set `GTFS_RELEASE` in `viewer/transit.js`, and upload the new `transit/<release>/` folder before the viewer. Past the timetable's end, the viewer keeps running El trains from the last matching weekday and says so in the status line.
+
+**Publish** (after the files above are built):
+
+```bash
+rclone copy output/philly/transit r2:pixel-philly/output/philly/transit --s3-no-check-bucket --header-upload "Cache-Control: public, max-age=3600"
+rclone copy output/philly/overlays/v18 r2:pixel-philly/output/philly/overlays/v18 --transfers 32 --checkers 64 --s3-no-check-bucket \
+  --header-upload "Cache-Control: public, max-age=31536000, immutable"
+rclone copy viewer r2:pixel-philly/viewer --s3-no-check-bucket --header-upload "Cache-Control: public, max-age=300"   # last
+```
+
+**Set up the Worker** (Cloudflare dashboard, once; no Node or build step):
+1. **Workers & Pages → Create → Worker.** Name it `pixel-philly-live`, deploy the starter, then **Edit code**. Replace everything with the contents of `worker/septa-live.js` and deploy.
+2. **Settings → Bindings → Add → R2 bucket:** variable name `BUCKET`, bucket `pixel-philly`.
+3. **Settings → Trigger events → Add → Cron trigger:** `* * * * *` (every minute; each run polls 4 times, 15 s apart).
+4. Open the Worker's own `*.workers.dev` URL once. It runs one poll and replies `ok: wrote live/vehicles.json with N vehicles`. Then https://pixelphilly.sstirling.com/live/vehicles.json should show a `fetched` time that changes every 15 s.
+5. **Caching:** on the sstirling.com zone, **Caching → Cache Rules → Create rule:** hostname equals `pixelphilly.sstirling.com` and URI path starts with `/live/` → eligible for cache, edge TTL "use cache-control header if present." Cloudflare doesn't cache `.json` by default, so without this rule every viewer poll is an R2 read.
+
+Cost (estimates): about 173,000 R2 writes a month (free tier: 1 million) and one Worker run a minute (free tier: 100,000 requests a day). The free plan allows 10 ms of CPU per run; parsing SEPTA's 183 KB response four times should fit. If the Worker's logs show CPU-limit errors, Workers Paid is $5 a month. If a feed fails, the Worker keeps the last good file, and the viewer warns once it's more than two minutes old.
 
 ## Rebuild the map
 
@@ -235,7 +291,7 @@ uv run pytest      # projection, regions, LiDAR shaping, facades, water, bridges
 | `config/<area>.json` | One file per area: bounding box, camera, data and drawing options. The 12 city regions plus earlier and test areas (`oldcity`, `fishtown`, `centercity`, `downtown`, `atlas_*`, `test_*`); configs that no longer build are in `config/retired/`. `config/flyover/` holds video camera paths |
 | `config/*.json` (others) | Reviewed lists applied in the scene build or QA: `qa_exceptions`, `height_overrides`, `stadium_exclusions`, `structure_exclusions`, `part_caps`, `invented_water_holds`, `golf`, `vessels`, `bridge_towers`, `bridge_structures`. Each entry records its reason and review date |
 | `scripts/00_get_data.py` | Downloads and checks the raw-data snapshot (see "One-time setup") |
-| `scripts/01`–`04q` (a few numbers are shared by two scripts, such as `23` and `25`; use the full file name) | Data downloads (buildings, trees, imagery, water, LiDAR, highways, rail, property records, OSM, streets, pools, parks, wetlands, city limits, golf, piers, bridges). `04m` prunes LiDAR tiles (dry run by default) |
+| `scripts/01`–`04r` (a few numbers are shared by two scripts, such as `23` and `25`; use the full file name) | Data downloads (buildings, trees, imagery, water, LiDAR, highways, rail, property records, OSM, streets, pools, parks, wetlands, city limits, golf, piers, bridges). `04m` prunes LiDAR tiles (dry run by default) |
 | `scripts/05`, `06`, `09` | Scene build, render (color and mask), alignment check |
 | `scripts/07`, `08`, `11`, `12`–`14` | Old City pilot tools: Gemini redraw, comparison page, palette test; Qwen baseline, training set and LoRA training |
 | `scripts/10`, `10b` | Water repaint and invented-water scan |
@@ -248,10 +304,12 @@ uv run pytest      # projection, regions, LiDAR shaping, facades, water, bridges
 | `scripts/29_flyover` | Flyover video from finished tiles |
 | `scripts/29_trace_vessels`–`33` | Ship and bridge review: vessel tracing, crops and contact sheets |
 | `scripts/34` | Favicon, touch icon and social preview cut from the tiles |
+| `scripts/04r`, `35`–`38` | Live transit layer: SEPTA timetable and tunnels, route shapes and El timetable, building-mask pyramid, vehicle sprites, local feed (see "Live transit layer") |
+| `worker/` | The Cloudflare Worker that copies SEPTA's live feeds to the bucket |
 | `src/pixelphilly/` | The library: `projection.py` (the single source of truth for the camera), `lidar.py`, `facades.py`, `lawns.py`, `golf.py`, `vessels.py`, `bridges.py`, `water.py`/`waterpaint.py`, `regions.py`, `joint_sampler.py`, `region_runner.py`, `qa.py`/`qa_scan.py`, `viewer_geo.py` and others |
 | `render/` | The three.js page that draws scenes (three.js r169, vendored, MIT) |
 | `gpu/` | Modal apps: `modal_app.py` (drawing) and `train_app.py` (LoRA training) |
-| `viewer/` | The map page, about page, OpenSeadragon 6.1.1 (vendored) and site images |
+| `viewer/` | The map page (`viewer.js`; the live transit layer in `transit.js` and `transit_core.js`), about page, OpenSeadragon 6.1.1 (vendored) and site images |
 | `prompts/` | Versioned prompts from the Gemini pilot |
 | `tests/` | pytest suite |
 | `data/raw/`, `data/processed/` | Downloads (immutable, logged in `MANIFEST.json`, checksums in `SHA256SUMS`; the files themselves come from `00_get_data.py`) and derived files |

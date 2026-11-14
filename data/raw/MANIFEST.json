@@ -12261,5 +12261,29 @@
     "license": "Open Database License (ODbL) 1.0, https://opendatacommons.org/licenses/odbl/",
     "credit": "\u00a9 OpenStreetMap contributors",
     "fetched_at": "2026-11-09T19:55:41+00:00"
+  },
+  "septa_gtfs_v202611010.zip": {
+    "description": "SEPTA static GTFS, release v202611010 (gtfs_public.zip, which holds google_bus.zip and google_rail.zip)",
+    "query_url": "https://github.com/septadev/GTFS/releases/download/v202611010/gtfs_public.zip",
+    "bytes": 26745416,
+    "sha256": "acff1b8757dd33fd195bd0e2fed75076d4e5be1bda5441c64aa85a259ab22813",
+    "license": "SEPTA developer license, https://www3.septa.org/developer/",
+    "credit": "SEPTA",
+    "fetched_at": "2026-11-14T18:13:56+00:00"
+  },
+  "philly_rail_tunnels_osm.json": {
+    "description": "OpenStreetMap railway tunnels (rail, subway, light rail, tram) inside the map, via Overpass",
+    "query_url": "https://overpass-api.de/api/interpreter",
+    "query": "[out:json][timeout:180];way[\"railway\"~\"^(rail|subway|light_rail|tram)$\"][\"tunnel\"][\"tunnel\"!=\"no\"](39.86480815125875,-75.28399636541867,40.141246179090835,-74.94781362117637);out tags geom;",
+    "bbox_wgs84": [
+      -75.28399636541867,
+      39.86480815125875,
+      -74.94781362117637,
+      40.141246179090835
+    ],
+    "feature_count": 487,
+    "license": "Open Database License (ODbL) 1.0, https://opendatacommons.org/licenses/odbl/",
+    "credit": "\u00a9 OpenStreetMap contributors",
+    "fetched_at": "2026-11-14T18:14:24+00:00"
   }
 }
