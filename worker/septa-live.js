@@ -25,6 +25,8 @@
 //
 // Setup (Cloudflare dashboard, no build step): see README "Live transit layer".
 // Bindings: an R2 bucket binding named BUCKET -> pixel-philly. Trigger: cron "* * * * *".
+// The only export is the default handler object: Workers treat other named
+// exports of the main module as entrypoints, so helpers stay unexported.
 // Tests: tests/test_live_feed.py runs normalize() in Chromium against saved
 // SEPTA responses and checks it matches scripts/38_live_feed.py.
 
@@ -32,8 +34,8 @@ const TRANSITVIEW = "https://www3.septa.org/api/TransitViewAll/index.php";
 const TRAINVIEW = "https://www3.septa.org/api/TrainView/index.php";
 // The v18 map's lon/lat extent (map.json fit.bounds_wgs84); the viewer
 // also drops vehicles outside the city line
-export const BOUNDS = [-75.28399636541867, 39.86480815125875, -74.94781362117637, 40.141246179090835];
-export const MAX_REPORT_AGE_S = 300; // a bus that hasn't reported in 5 minutes is likely out of service
+const BOUNDS = [-75.28399636541867, 39.86480815125875, -74.94781362117637, 40.141246179090835];
+const MAX_REPORT_AGE_S = 300; // a bus that hasn't reported in 5 minutes is likely out of service
 const POLLS_PER_RUN = 4;
 const POLL_INTERVAL_MS = 15000;
 
@@ -49,7 +51,7 @@ const lateness = (v) => {
 };
 const inside = (lon, lat, b) => lon >= b[0] && lon <= b[2] && lat >= b[1] && lat <= b[3];
 
-export function normalize(transitView, trainView, nowS, bounds = BOUNDS) {
+function normalize(transitView, trainView, nowS, bounds = BOUNDS) {
   const vehicles = [];
   for (const group of transitView?.routes || []) {
     for (const [route, list] of Object.entries(group)) {
@@ -103,13 +105,13 @@ export default {
       }
     }
   },
-  // Visiting the Worker's own URL runs one poll: a quick check after setup
+  // Visiting the Worker's own URL reports how fresh the file is. It never
+  // polls SEPTA or writes, so nobody can run up requests or bucket writes.
   async fetch(request, env) {
-    try {
-      const n = await pollOnce(env);
-      return new Response(`ok: wrote live/vehicles.json with ${n} vehicles\n`);
-    } catch (err) {
-      return new Response(`failed: ${err}\n`, { status: 502 });
-    }
+    const obj = await env.BUCKET.get("live/vehicles.json");
+    if (!obj) return new Response("no live/vehicles.json yet: the cron trigger hasn't run (allow up to 15 minutes after adding it)\n");
+    const data = await obj.json();
+    const age = Math.round(Date.now() / 1000 - data.fetched);
+    return new Response(`ok: live/vehicles.json has ${data.vehicles.length} vehicles, fetched ${age} s ago\n`);
   },
 };

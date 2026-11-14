@@ -120,12 +120,13 @@ rclone copy output/philly/overlays/v18 r2:pixel-philly/output/philly/overlays/v1
 rclone copy viewer r2:pixel-philly/viewer --s3-no-check-bucket --header-upload "Cache-Control: public, max-age=300"   # last
 ```
 
-**Set up the Worker** (Cloudflare dashboard, once; no Node or build step):
-1. **Workers & Pages → Create → Worker.** Name it `pixel-philly-live`, deploy the starter, then **Edit code**. Replace everything with the contents of `worker/septa-live.js` and deploy.
-2. **Settings → Bindings → Add → R2 bucket:** variable name `BUCKET`, bucket `pixel-philly`.
-3. **Settings → Trigger events → Add → Cron trigger:** `* * * * *` (every minute; each run polls 4 times, 15 s apart).
-4. Open the Worker's own `*.workers.dev` URL once. It runs one poll and replies `ok: wrote live/vehicles.json with N vehicles`. Then https://pixelphilly.sstirling.com/live/vehicles.json should show a `fetched` time that changes every 15 s.
-5. **Caching:** on the sstirling.com zone, **Caching → Cache Rules → Create rule:** hostname equals `pixelphilly.sstirling.com` and URI path starts with `/live/` → eligible for cache, edge TTL "use cache-control header if present." Cloudflare doesn't cache `.json` by default, so without this rule every viewer poll is an R2 read.
+**Set up the Worker** (Cloudflare dashboard, once; no Node or build step). The dashboard's labels change from time to time; these were written Nov. 14, 2026.
+1. **Workers & Pages → Create application → Start with Hello World!** (not "Import a repository," which needs Git). Name it `pixel-philly-live` and select **Deploy**.
+2. **Edit code** (top right of the Worker's page). Delete everything in `worker.js`, paste in all of `worker/septa-live.js` and select **Deploy**.
+3. **Bindings → Add binding → R2 bucket:** variable name `BUCKET`, bucket `pixel-philly`. Save and deploy.
+4. **Settings → Trigger Events → Add → Cron Triggers:** schedule `* * * * *` (every minute; each run polls 4 times, 15 s apart). Cron changes can take up to 15 minutes to start.
+5. **Check:** the Worker's own `*.workers.dev` URL reports `ok: live/vehicles.json has N vehicles, fetched N s ago`. It only reads; it never polls SEPTA or writes. https://pixelphilly.sstirling.com/live/vehicles.json should show a `fetched` time that changes every 15 s. If something fails, **Observability → Logs** on the Worker shows the error (the Worker logs each failed poll).
+6. **Caching:** sstirling.com → **Caching → Cache Rules → Create rule:** custom filter, hostname equals `pixelphilly.sstirling.com` AND URI path starts with `/live/`; cache eligibility **Eligible for cache**; edge TTL **Use cache-control header if present**. Cloudflare doesn't cache `.json` by default, so without this rule every viewer poll is an R2 read.
 
 Cost (estimates): about 173,000 R2 writes a month (free tier: 1 million) and one Worker run a minute (free tier: 100,000 requests a day). The free plan allows 10 ms of CPU per run; parsing SEPTA's 183 KB response four times should fit. If the Worker's logs show CPU-limit errors, Workers Paid is $5 a month. If a feed fails, the Worker keeps the last good file, and the viewer warns once it's more than two minutes old.
 

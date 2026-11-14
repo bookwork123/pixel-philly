@@ -56,6 +56,13 @@ Stephen asked for live SEPTA buses, rail and the El on the map (Indego skipped f
   - **Check:** with the page clock pinned to a scheduled El passing (Nov. 16, 1:03 p.m.), the train rounds the Kensington Ave–Front St curve with uniform cars, each turned a little more than the one behind it. The full suite passes (531).
 - **No dots when zoomed out** (Stephen: "I just want this to be something people come across, not a driving feature"). Below 0.12 screen px per map px nothing is drawn, and clicks find nothing. Vehicles appear as sprites from there in, where a bus is about 5 px long. Checked headless: 0 vehicles drawn at zoom 0.02 and 0.1, vehicles drawn at 0.3.
 - **No "Live transit" button** (Stephen: "fine to lose the button from the bar. It's worth leaving the Septa data update note"). The layer is always on, the status line with SEPTA's update time stays, and `?live=off` still turns it off. `createTransitLayer` takes the button as an option, unused.
+- **Deployed (Nov. 14, 3:16–3:25 p.m.).**
+  - Stephen created the Worker `pixel-philly-live` in the Cloudflare dashboard (Create application → Start with Hello World!, pasted `worker/septa-live.js`, R2 binding `BUCKET` → `pixel-philly`, cron `* * * * *`). Before he pasted it, the Worker's file was changed so that only the default handler is exported, and its public URL only reports how fresh the file is (it never polls or writes).
+  - The first `live/vehicles.json` landed at 3:16:37 p.m. (365 vehicles: 346 buses and trolleys, 19 trains), and it updates every 15 s.
+  - Uploaded `output/philly/transit/` (162 files), `output/philly/overlays/v18/` (37,041 files; `rclone check`: 0 differences) and then `viewer/`.
+  - Headless check of https://pixelphilly.sstirling.com: the status line shows SEPTA's update time, 8 vehicles drawn at zoom 0.5 on Front St, no page errors.
+  - The `/live/` Cache Rule (hostname `pixelphilly.sstirling.com` and path starting `/live/`, eligible for cache, edge TTL from the origin's cache-control) works: repeat fetches return `HIT` with `age` up to about 10 s, then `EXPIRED` and a fresh copy. The data a viewer sees is at most about 10 s older than the bucket's.
+  - The zone's Browser Cache TTL overrides the viewer's 5-minute cache with 4 hours (`max-age=14400`).
 - **Docs:** README section "Live transit layer" (how it works, rebuild, publish, Worker setup, costs as estimates), `data/README.md` sources, and an about-page "Live transit" section.
 - **Tests:** 33 new, in `test_transit.py`, `test_live_feed.py` (the Worker's JavaScript and the Python stand-in agree on real SEPTA responses), `test_transit_viewer.py`, `test_vehicle_sprites.py` and `test_occlusion.py`. The full suite passed (526) before the fix above.
 
