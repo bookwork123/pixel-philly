@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-16: merge script for redraw passes
+
+Merging a fix pass into the base run was a manual copy (a known issue). New `scripts/39_merge_pass.py`, with the logic in `src/pixelphilly/merge_pass.py`, does the README's four steps:
+- backs up the frames being replaced to `redraws/<base>_pre_<suffix>/` (never over an existing backup), copies the pass's frames in, and records each frame's checksums before and after in `redraws/<pass>/merged.json`;
+- repaints the area, then every area whose `water_band/` holds a copy of those frames, found from the files; then checks no repainted file is older than the merged drawings;
+- refuses, changing nothing, a pass still drawing, already merged, or with frames the base run never drew; skips frames identical to the base.
+- Merged frames get a fresh modification time, so `regions.stale_known` sees them as needing a repaint even when the pass was collected before the area's last repaint.
+- Tests: `tests/test_merge_pass.py` (fake output tree, CPU only). Not yet run on real map frames. The v18 passes stay as they were merged by hand; `26_freeze_map.py` still lists passes by folder name.
+
 ## 2026-11-14: live SEPTA transit layer
 
 Stephen asked for live SEPTA buses, rail and the El on the map (Indego skipped for now). The plan was approved in plan mode. This is a viewer layer, so the map image doesn't change, and v18 stays frozen and untouched (new files live in their own folders).
