@@ -227,11 +227,19 @@ PP_AREA=south_lidar uv run python scripts/15_joint_sample.py --full --volume \
 # then the same command with --collect, repeated until done
 ```
 
-**Merging a pass is a manual step; no script in the repo does it.**
-1. Back up the frames being replaced, to `output/<area>/redraws/qwen_joint_light8_fac_pre_<suffix>/`, where the suffix names the pass (for example `_pre_bridges`).
-2. Copy the pass's PNGs from `output/<area>/redraws/<pass>/` into `output/<area>/redraws/qwen_joint_light8_fac/`.
-3. Repaint the area: `10_repaint_water.py --prompt qwen_joint_light8_fac --invented-water fix`.
-4. Re-repaint any neighboring area that holds copies of those frames in `water_band/` (each area's repaint keeps its own copy of a neighbor's frames along the join, so water matches across it). `15_joint_sample.py` and `16_build_tiles.py` refuse to run on stale cells, so a missed step stops the build rather than slipping through.
+**Merge the pass** with `scripts/39_merge_pass.py` (the v18 passes were merged by hand, with the same steps):
+
+```bash
+PP_AREA=south_lidar uv run python scripts/39_merge_pass.py --pass qwen_joint_light8_fac_v18rest --dry-run   # show the plan
+PP_AREA=south_lidar uv run python scripts/39_merge_pass.py --pass qwen_joint_light8_fac_v18rest
+```
+
+1. It backs up the frames being replaced to `output/<area>/redraws/qwen_joint_light8_fac_pre_<suffix>/`, where the suffix names the pass (by default the pass name minus `qwen_joint_light8_fac_`, for example `_pre_bridges`). Backups are never overwritten.
+2. It copies the pass's PNGs from `output/<area>/redraws/<pass>/` into `output/<area>/redraws/qwen_joint_light8_fac/`, skipping frames that came out identical, and records each frame's checksums before and after in `redraws/<pass>/merged.json`.
+3. It repaints the area: `10_repaint_water.py --prompt qwen_joint_light8_fac --invented-water fix`.
+4. It repaints every other area that holds copies of those frames in `water_band/` (each area's repaint keeps its own copy of a neighbor's frames along the join, so water matches across it). It finds them from the `water_band/` folders, then checks that no repainted file is older than the merged drawings.
+
+It refuses, changing nothing, when the pass is still drawing, was already merged, or has frames the base run never drew. `--no-repaint` merges the files and prints the repaint commands; `--check-only` checks them afterward. `15_joint_sample.py` and `16_build_tiles.py` also refuse to run on stale cells, so a missed repaint stops the build rather than slipping through.
 
 Passes whose frames are in v18:
 
@@ -297,6 +305,7 @@ uv run pytest      # projection, regions, LiDAR shaping, facades, water, bridges
 | `scripts/07`, `08`, `11`, `12`–`14` | Old City pilot tools: Gemini redraw, comparison page, palette test; Qwen baseline, training set and LoRA training |
 | `scripts/10`, `10b` | Water repaint and invented-water scan |
 | `scripts/15` | The joint, seam-free drawing on Modal (full regions, known bands, redraw passes) |
+| `scripts/39` | Merge a redraw pass into the base run and repaint the areas it touches (see "Fix passes") |
 | `scripts/16` | Merge regions and cut Deep Zoom tiles |
 | `scripts/17`–`21`, `24`, `25_clean_v2` | Experiments: problem atlas, landmark references, clean-style comparisons |
 | `scripts/18`, `22`, `23_preflight_regions`, `25_join_seams` | QA scan, region runner, region pre-flight, seam scores |
@@ -344,7 +353,6 @@ Details and history in the CHANGELOG.
 | Teal invented water isn't caught by the scan | One case at Cobbs Creek, found by eye and redrawn | The scan's hue band misses teal; widening it catches real pools | Scan rule |
 | Stadium outer walls drawn with windows; Franklin Field's lower deck missing | The Linc, Citizens Bank Park, Franklin Field | Tall walls read as facades; aerial LiDAR can't see under the upper deck | Model, geometry |
 | Region joins visible at 1:1 | All joins; worst on the South/North join | Two regions draw straddling content a little differently | Sampler |
-| Merging a redraw pass is a manual copy, not a script | Fix passes | No merge script yet | Reproducibility |
 | The map's credit line mentions OpenStreetMap only for facade colors; OSM also shaped golf courses, piers and the bridges | `map.json` credits | Not yet updated | Credits |
 
 ## Licensing and disclosure
